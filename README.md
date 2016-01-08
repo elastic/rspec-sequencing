@@ -1,6 +1,6 @@
 # Rspec::Sequencing
 
-Define sequenced actions that simulate real-world scenarios, e.g write_file then 2 seconds later rename it
+Define sequenced actions that simulate real-world scenarios, e.g. write_file then 2 seconds later rename it or execute a sequence of actions on a http server
 
 ## Installation
 
@@ -24,7 +24,7 @@ Generally one would use this when you need to have a series of actions occur in 
 
 Add `require "rspec_sequencing"` in your spec_helper.rb or equivalent.
 
-In your example group you can either define a sequence in a before block or a let block.  If you use a let block, then you should call the activate method on the sequence to get RSpec to create it, in a before block or in the example.
+In your example group you can define a sequence in a before block or a let block.  If you use a let block, then you should call the activate method on the sequence to get RSpec to create it. Call activate in a before block or in the example.
 
 e.g. from the ruby-filewatch gem watch_spec.rb
 ```ruby
@@ -38,13 +38,13 @@ e.g. from the ruby-filewatch gem watch_spec.rb
           subject.watch(File.join(directory, "*.log"))
         end
         .then_after(0.55, "quit after a short time") do
-          subject.quit
+          subject.quit # <- unblocks the RSpec thread
         end
     end
 
     it "yields create_initial and one modify file events" do
       actions.activate
-      subscribe_proc.call
+      subscribe_proc.call # <- blocks the RSpec thread
       expect(results).to eq([[:create_initial, file_path], [:modify, file_path]])
     end
   end
@@ -76,18 +76,14 @@ and some instance methods:
 ```
 Note that the description is optional, however by adding a description you document the action in the code and the spec output.
 
-run
-
 You are free to use the dataflow or task methods if you need unchained dataflows or tasks.
 
 This library is multithreaded and uses the `concurrent-ruby` Dataflow and ScheduledTask mechanisms so you should set `Thread.abort_on_exception = true`
 in your specs so any exceptions in your actions bubble up to spec execution.
 
-## Development
-
-After checking out the repo, run `bin/setup` to install dependencies. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
-
-To install this gem onto your local machine, run `bundle exec rake install`. To release a new version, update the version number in `version.rb`, and then run `bundle exec rake release`, which will create a git tag for the version, push git commits and tags, and push the `.gem` file to [rubygems.org](https://rubygems.org).
+### Please note:
+- The sequence executes in different threads from the main RSpec thread. You will need to wait for the sequence value (see this library's specs) otherwise the test will end before the sequence ends and any expectations based on side effects of the sequence will not be met. However, if you are testing scenarios where the main RSpec thread is blocked in some way, e.g. a subscribe loop, then one, usually the last, task should act to unblock the RSpec main thread. In this case you should not wait on the sequence value.
+- The system that you are testing needs to be thread safe.
 
 ## Contributing
 

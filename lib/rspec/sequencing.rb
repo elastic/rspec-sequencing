@@ -20,13 +20,14 @@ module RSpec
     end
 
     def then(description, &block)
-      then_after(0, description = '', &block)
+      then_after(0, description, &block)
     end
 
     def dataflow(delay, description = '', inputs = [], &block)
       Concurrent.dataflow(*inputs.compact) do
-        task(delay, &block).execute.value
-        formatted_puts(description) unless description.empty?
+        task(delay, &block).execute.value.tap do
+          formatted_puts(description)
+        end
       end
     end
 
@@ -50,8 +51,14 @@ module RSpec
     private
 
     def formatted_puts(text)
+      return if text.empty? || !doc_formatter?
       txt = RSpec.configuration.format_docstrings_block.call(text)
       RSpec.configuration.output_stream.puts "    #{txt}"
+    end
+
+    def doc_formatter?
+      @doc_formatter ||= RSpec.configuration.formatters.first.is_a?(
+        RSpec::Core::Formatters::DocumentationFormatter)
     end
   end
 end
