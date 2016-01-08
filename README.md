@@ -24,7 +24,7 @@ Generally one would use this when you need to have a series of actions occur in 
 
 Add `require "rspec_sequencing"` in your spec_helper.rb or equivalent.
 
-In your example group you can define a sequence in a before block or a let block.  If you use a let block, then you should call the activate method on the sequence to get RSpec to create it. Call activate in a before block or in the example.
+In your example group you can define a sequence in a `before` block or a `let` block.  If you use a `let` block, then you should call the `activate` method on the sequence to get RSpec to create it. Call `activate` in a `before` block or in the `example`.
 
 e.g. from the ruby-filewatch gem watch_spec.rb
 ```ruby
