@@ -24,42 +24,151 @@ Generally one would use this when you need to have a series of actions occur in 
 
 Add `require "rspec_sequencing"` in your spec_helper.rb or equivalent.
 
-In your example group you can define a sequence in a `before` block or a `let` block.  If you use a `let` block, then you should call the `activate` method on the sequence to get RSpec to create it. Call `activate` in a `before` block or in the `example`.
+### Example
 
-e.g. from the ruby-filewatch gem watch_spec.rb
+Lets start with an abstract example. Imagine you want to fully test a Order Processing external api. Suppose you want to test the Product Return/Refund api call.
+Assumptions:
+- you have a client class that connects to the gateway.
+- the client returns a response message from the api call.
+- the order processing system uses background jobs to handle order changes
+- necessary `let` variables for creds, order details and client etc. are available.
+
 ```ruby
-  context "when watching a directory with files" do
-    let(:actions) do
-      RSpec::Sequencing
-        .run("create file") do
-          File.open(file_path, "wb") { |file|  file.write("line1\nline2\n") }
-        end
-        .then_after(0.25, "start watching when directory has files") do
-          subject.watch(File.join(directory, "*.log"))
-        end
-        .then_after(0.55, "quit after a short time") do
-          subject.quit # <- unblocks the RSpec thread
-        end
-    end
+  context "when refunding an order" do
+    let(:results)  { Hash.new(NullObject.new) }
 
-    it "yields create_initial and one modify file events" do
-      actions.activate
-      subscribe_proc.call # <- blocks the RSpec thread
-      expect(results).to eq([[:create_initial, file_path], [:modify, file_path]])
+    it "returns-processing starts and a refund is pending" do
+      RSpec::Sequencing
+        .run("login") do
+          results[:auth] = client.login(*creds)
+        end
+        .then("place order") do
+          results[:new_order] = client.place_order(order_details)
+        end
+        .then_after(2, "pay for order") do #<-- wait for place order background job
+          results[:pay_order] = client.pay_for_order(order_details)
+        end
+        .then_after(1, "ship order because we received payment") do
+          results[:shipit] = client.ship_order(order_details)
+        end
+        .then_after(2, "refund order") do
+          results[:refund] = client.refund_order(order_details)
+        end
+        .value # <-- we need to wait for the last action to complete
+
+      expect(results[:auth]).to      eq("Welcome")
+      expect(results[:new_order]).to eq("Order placed. Picking started")
+      expect(results[:pay_order]).to eq("Payment received, thank you.")
+      expect(results[:shipit]).to    eq("Order shipped")
+      expect(results[:refund]).to    eq("Order returns processing started, you will receive a refund when we receive the goods back")
     end
   end
 ```
 and the spec output will be
 ```
-FileWatch::Watch
-  when watching a directory with files
-    sequence activated
-    subscribing
-    create file
-    start watching when directory has files
-    quit after a short time
-    yields create_initial and one modify file events
+  when refunding an order
+    login
+    place order
+    pay for order
+    ship order because we received payment
+    refund order
+    returns-processing starts and a refund is pending
 ```
+
+You might be tempted to think, I can just do:
+```ruby
+  context "when refunding an order" do
+    it "returns-processing starts and a refund is pending" do
+      message = client.login(*creds)
+      expect(message).to eq("Welcome")
+
+      message = client.place_order(order_details)
+      expect(message).to eq("Order placed. Picking started")
+
+      sleep 2
+      message = client.pay_for_order(order_details)
+      expect(message).to eq("Payment received, thank you.")
+
+      sleep 1
+      message = client.ship_order(order_details)
+      expect(message).to eq("Order shipped")
+
+      sleep 2
+      message = client.refund_order(order_details)
+      expect(message).to eq("Order returns processing started, you will receive a refund when we receive the goods back")
+    end
+  end
+```
+and you would be correct, for this contrived example.
+
+Here is a real example from the ruby-file_watch library. Here we use Sequencing to let files age and other elapsed time mechanisms.
+```ruby
+describe FileWatch::Watch do
+  before(:all) do
+    @thread_abort = Thread.abort_on_exception
+    Thread.abort_on_exception = true
+  end
+
+  after(:all) do
+    Thread.abort_on_exception = @thread_abort
+  end
+
+  let(:directory) { Stud::Temporary.directory }
+  let(:watch_dir) { File.join(directory, "*.log") }
+  let(:file_path) { File.join(directory, "1.log") }
+  let(:loggr)     { double("loggr", :debug? => true) }
+  let(:results)   { [] }
+  let(:stat_interval) { 0.1 }
+  let(:discover_interval) { 4 }
+
+  let(:subscribe_proc) do
+    lambda do
+      formatted_puts("subscribing")
+      # subject subscribe does not return until subject.quit is called
+      subject.subscribe(stat_interval, discover_interval) do |event, watched_file|
+        results.push([event, watched_file.path])
+      end
+    end
+  end
+
+  subject { FileWatch::Watch.new(:logger => loggr) }
+
+  before do
+    allow(loggr).to receive(:debug)
+  end
+  after do
+    FileUtils.rm_rf(directory)
+  end
+
+  context "when ignore older and close older expiry is enabled and after timeout the file is appended-to" do
+    before do
+      subject.ignore_older = 2
+      subject.close_older = 2
+
+      RSpec::Sequencing
+        .run("create file") do
+          File.open(file_path, "wb") { |file|  file.write("line1\nline2\n") }
+        end
+        .then_after(3.1, "start watching after the file ages more than two seconds") do
+          subject.watch(watch_dir)
+        end
+        .then("append more lines to file when its 'ignored'") do
+          File.open(file_path, "ab") { |file|  file.write("line3\nline4\n") }
+        end
+        .then_after(3.1, "quit after allowing time for the close mechanism (timeout)") do
+          subject.quit #<--- this unblocks the subscribe loop
+        end
+    end
+
+    it "yields unignore, modify then timeout file events" do
+      subscribe_proc.call #<--- the rspec thread is in a forever loop until quit is called in another thread
+      expect(results).to eq([[:unignore, file_path], [:modify, file_path], [:timeout, file_path]])
+    end
+  end
+end
+```
+
+### API
 
 There are two class level constructional methods:
 ```ruby
@@ -71,12 +180,8 @@ and some instance methods:
 ```ruby
   then(description = '', &block) # when the previous action completed the block runs without delay
   then_after(delay, description = '', &block) # when the previous action completed the block runs after delay seconds
-  dataflow(delay, description = '', inputs = [], &block)
-  task(delay, &block)
 ```
 Note that the description is optional, however by adding a description you document the action in the code and the spec output.
-
-You are free to use the dataflow or task methods if you need unchained dataflows or tasks.
 
 This library is multithreaded and uses the `concurrent-ruby` Dataflow and ScheduledTask mechanisms so you should set `Thread.abort_on_exception = true`
 in your specs so any exceptions in your actions bubble up to spec execution.
