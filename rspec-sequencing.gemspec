@@ -4,7 +4,8 @@ $LOAD_PATH.unshift(lib) unless $LOAD_PATH.include?(lib)
 
 Gem::Specification.new do |spec|
   spec.name          = "rspec-sequencing"
-  spec.version       = "0.1.0"
+  spec.version       = "0.1.1"
+  spec.licenses      = ['Apache-2.0']
   spec.authors       = ["Elastic"]
   spec.email         = ["info@elastic.co"]
 
