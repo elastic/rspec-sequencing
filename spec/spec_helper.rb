@@ -1,5 +1,7 @@
+# encoding: utf-8
+
 # uses ruby-concurrent, so we can use Concurrent.monotonic_time
-require "rspec_sequencing"
+require 'rspec_sequencing'
 
 module RSpec
   class TimedTuple

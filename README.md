@@ -101,71 +101,36 @@ You might be tempted to think, I can just do:
 ```
 and you would be correct, for this contrived example.
 
-Here is a real example from the ruby-file_watch library. Here we use Sequencing to let files age and other elapsed time mechanisms.
+Here is a real example from the Logstash file input plugin tests. Here we use Sequencing to let files age and other elapsed time mechanisms.
 ```ruby
-describe FileWatch::Watch do
-  before(:all) do
-    @thread_abort = Thread.abort_on_exception
-    Thread.abort_on_exception = true
-  end
+    context "when ignore_older is less than close_older and all files are not expired" do
+      let(:opts) { super.merge(:ignore_older => 1, :close_older => 1.1) }
+      let(:suffix) { "N" }
+      let(:actions) do
+        RSpec::Sequencing
+          .run_after(0.1, "file created") do
+            File.open(file_path, "wb") { |file|  file.write("line1\nline2\n") }
+          end
+          .then("start watching before file age reaches ignore_older") do
+            tailing.watch_this(watch_dir)
+          end
+          .then("wait for lines") do
+            wait(1.2).for{listener1.calls}.to eq([:open, :accept, :accept, :timed_out])
+          end
+          .then("quit after allowing time to close the file") do
+            tailing.quit
+          end
+      end
 
-  after(:all) do
-    Thread.abort_on_exception = @thread_abort
-  end
-
-  let(:directory) { Stud::Temporary.directory }
-  let(:watch_dir) { File.join(directory, "*.log") }
-  let(:file_path) { File.join(directory, "1.log") }
-  let(:loggr)     { double("loggr", :debug? => true) }
-  let(:results)   { [] }
-  let(:stat_interval) { 0.1 }
-  let(:discover_interval) { 4 }
-
-  let(:subscribe_proc) do
-    lambda do
-      formatted_puts("subscribing")
-      # subject subscribe does not return until subject.quit is called
-      subject.subscribe(stat_interval, discover_interval) do |event, watched_file|
-        results.push([event, watched_file.path])
+      it "reads lines normally" do
+        actions.activate
+        # subscribe is a blocking operation until tailing.quit is called on the sequence threads
+        # and that last step is dependent on the wait(1.2).for rspec expectation to succeed. 
+        tailing.subscribe(observer)
+        actions.assert_no_errors # if the rspec `wait` call times out then this raises the RSpec failed assertion exception.
+        expect(listener1.lines).to eq(["line1", "line2"])
       end
     end
-  end
-
-  subject { FileWatch::Watch.new(:logger => loggr) }
-
-  before do
-    allow(loggr).to receive(:debug)
-  end
-  after do
-    FileUtils.rm_rf(directory)
-  end
-
-  context "when ignore older and close older expiry is enabled and after timeout the file is appended-to" do
-    before do
-      subject.ignore_older = 2
-      subject.close_older = 2
-
-      RSpec::Sequencing
-        .run("create file") do
-          File.open(file_path, "wb") { |file|  file.write("line1\nline2\n") }
-        end
-        .then_after(3.1, "start watching after the file ages more than two seconds") do
-          subject.watch(watch_dir)
-        end
-        .then("append more lines to file when its 'ignored'") do
-          File.open(file_path, "ab") { |file|  file.write("line3\nline4\n") }
-        end
-        .then_after(3.1, "quit after allowing time for the close mechanism (timeout)") do
-          subject.quit #<--- this unblocks the subscribe loop
-        end
-    end
-
-    it "yields unignore, modify then timeout file events" do
-      subscribe_proc.call #<--- the rspec thread is in a forever loop until quit is called in another thread
-      expect(results).to eq([[:unignore, file_path], [:modify, file_path], [:timeout, file_path]])
-    end
-  end
-end
 ```
 
 ### API
@@ -180,13 +145,22 @@ and some instance methods:
 ```ruby
   then(description = '', &block) # when the previous action completed the block runs without delay
   then_after(delay, description = '', &block) # when the previous action completed the block runs after delay seconds
+  
+ # use `activate` or `activate_quietly`, when defining a sequence in a `let` block,
+ #   to get RSpec to instantiate the sequence.
+  activate # this will print 'sequence activated' to the RSpec output_stream
+  activate_quietly # this will print nothing to the RSpec output_stream
+  value # this will block until the value from the last step is available
 ```
-Note that the description is optional, however by adding a description you document the action in the code and the spec output.
+#### Note:
+The description is optional, however by adding a description you document
+the action in the code and the spec output. The description is printed after the delay and before the block is executed - use present tense, e.g. "Creating file" 
 
-This library is multithreaded and uses the `concurrent-ruby` Dataflow and ScheduledTask mechanisms so you should set `Thread.abort_on_exception = true`
-in your specs so any exceptions in your actions bubble up to spec execution.
+This library is multithreaded and uses the `concurrent-ruby` Dataflow feature.
+Dataflow will absorb any exceptions and cause the dataflow to be rejected with the `reason` set to the Exception.
+In this case, use the `assert_no_errors` method - this will re-raise the first exception it finds.
 
-### Please note:
+#### Note:
 - The sequence executes in different threads from the main RSpec thread. You will need to wait for the sequence value (see this library's specs) otherwise the test will end before the sequence ends and any expectations based on side effects of the sequence will not be met. However, if you are testing scenarios where the main RSpec thread is blocked in some way, e.g. a subscribe loop, then one, usually the last, task should act to unblock the RSpec main thread. In this case you should not wait on the sequence value.
 - The system that you are testing needs to be thread safe.
 

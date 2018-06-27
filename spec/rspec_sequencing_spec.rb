@@ -1,3 +1,5 @@
+# encoding: utf-8
+
 require_relative 'spec_helper'
 
 describe RSpec::Sequencing do
@@ -51,6 +53,65 @@ describe RSpec::Sequencing do
       task3 = timed_tuples.results[2]
       expect(task3.offset).to be_within(0.05).of(0.15 + 0.25 + 0.35)
       expect(task3.value).to eq("III")
+    end
+  end
+
+  context "if a block does not raise an error, the sequence completes" do
+    let(:actions) do
+      RSpec::Sequencing.run("executed first task") do
+        :starting
+      end
+      .then_after(0.25, "executed second task") do
+        :and_then
+      end
+      .then_after(0.25, "executed third task") do
+        :finally
+      end
+    end
+    it "`assert_no_errors` will re-raise the error in the example group thread" do
+      actions.activate_quietly
+      expect{actions.assert_no_errors}.not_to raise_exception
+      expect(actions.assert_no_errors).to eq([:starting, :and_then, :finally])
+    end
+  end
+
+  context "if a block raises an error, the sequence completes" do
+    context "when raising one error" do
+      let(:actions) do
+        RSpec::Sequencing.run("executed first task") do
+          timed_tuples.add("I")
+          :starting
+        end
+        .then_after(0.25, "executed second task") do
+          raise "Ooops"
+        end
+        .then_after(0.25, "executed third task") do
+          timed_tuples.add("II")
+          :done
+        end
+      end
+      it "`assert_no_errors` will re-raise the only error in the example group thread" do
+        timed_tuples.clear
+        actions.activate_quietly
+        expect{actions.assert_no_errors}.to raise_exception("Ooops")
+        expect(timed_tuples.results[1].value).to eq("II")
+        expect(actions.value).to eq(:done)
+      end
+    end
+
+    context "when raising two errors" do
+      let(:actions) do
+        RSpec::Sequencing.run("executed first task") do
+          raise "Ooops X"
+        end
+        .then_after(0.25, "executed second task") do
+          raise "Ooops Y"
+        end
+      end
+      it "`assert_no_errors` will re-raise the first error in the example group thread" do
+        actions.activate_quietly
+        expect{actions.assert_no_errors}.to raise_exception("Ooops X")
+      end
     end
   end
 end

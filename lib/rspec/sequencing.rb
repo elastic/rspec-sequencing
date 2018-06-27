@@ -1,3 +1,5 @@
+# encoding: utf-8
+
 require 'concurrent'
 
 module RSpec
@@ -10,42 +12,49 @@ module RSpec
       new.then_after(delay, description, &block)
     end
 
+    attr_reader :flows
+
     def initialize
-      @flow = nil
+      @flows = []
     end
 
     def then_after(delay, description = '', &block)
-      @flow = dataflow(delay, description, [@flow], &block)
+      @flows << Concurrent.dataflow(*@flows) do
+        sleep delay
+        formatted_puts(description) unless description.empty?
+        block.call
+      end
       self
     end
 
-    def then(description, &block)
+    def then(description = '', &block)
       then_after(0, description, &block)
     end
 
-    def dataflow(delay, description = '', inputs = [], &block)
-      Concurrent.dataflow(*inputs.compact) do
-        task(delay, &block).execute.value.tap do
-          formatted_puts(description)
-        end
-      end
-    end
-
-    def task(delay, &block)
-      Concurrent::ScheduledTask.new(delay) do
-        block.call
-        true
-      end
+    def activate_quietly
+      # use this method if you define the sequencing in a let block so RSpec instantiates it
     end
 
     def activate
-      # use this method if you define the sequencing in a let block
-      # so RSpec runs it
+      # use this method if you define the sequencing in a let block so RSpec instantiates it
       formatted_puts "sequence activated"
     end
 
+    def assert_no_errors
+      # if you think you might get exceptions raised in any step the use this to get rspec to see them
+      # the raised error gets set as the dataflow `reason`.
+      value
+      @flows.map do |flow|
+        if flow.rejected?
+          raise flow.reason
+        end
+        flow.value
+      end
+    end
+
     def value
-      @flow.value
+      # this is a blocking operation
+      @flows.last.value
     end
 
     private
